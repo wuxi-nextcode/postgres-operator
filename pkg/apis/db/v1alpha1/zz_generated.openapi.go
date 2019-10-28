@@ -77,6 +77,12 @@ func schema_pkg_apis_db_v1alpha1_PostgresSpec(ref common.ReferenceCallback) comm
 							Format: "",
 						},
 					},
+					"masterRole": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
+						},
+					},
 					"dropOnDelete": {
 						SchemaProps: spec.SchemaProps{
 							Type:   []string{"boolean"},

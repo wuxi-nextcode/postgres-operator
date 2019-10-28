@@ -12,6 +12,8 @@ import (
 type PostgresSpec struct {
 	Database     string `json:"database"`
 	// +optional
+	MasterRole   string `json:"masterRole"`
+	// +optional
 	DropOnDelete bool   `json:"dropOnDelete"`
 }
 
