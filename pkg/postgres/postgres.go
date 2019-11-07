@@ -10,13 +10,15 @@ import "github.com/lib/pq"
 
 type PG interface {
 	CreateDB(dbname, username string) error
+	CreateSchema(db, role, schema string, logger logr.Logger) error
 	CreateGroupRole(role string) error
 	CreateUserRole(role, password string) error
 	UpdatePassword(role, password string) error
 	GrantRole(role, grantee string) error
+	SetSchemaPrivileges(db, creator, role, schema, privs string, logger logr.Logger) error
 	RevokeRole(role, revoked string) error
 	AlterDefaultLoginRole(role, setRole string) error
-	DropDatabase(database string, logger logr.Logger) error
+	DropDatabase(db string, logger logr.Logger) error
 	DropRole(role, newOwner, database string, logger logr.Logger) error
 	GetUser() string
 }
@@ -57,6 +59,17 @@ func (c *pg) CreateDB(dbname, role string) error {
 	return nil
 }
 
+func (c *pg) CreateSchema(db, role, schema string, logger logr.Logger) error {
+	tmpDb := GetConnection(c.user, c.pass, c.host, db, c.args, logger)
+	defer tmpDb.Close()
+
+	_, err := tmpDb.Exec(fmt.Sprintf(CREATE_SCHEMA, schema, role))
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func (c *pg) CreateGroupRole(role string) error {
 	// Error code 42710 is duplicate_object (role already exists)
 	_, err := c.db.Exec(fmt.Sprintf(CREATE_GROUP_ROLE, role))
@@ -76,6 +89,30 @@ func (c *pg) CreateUserRole(role, password string) error {
 
 func (c *pg) GrantRole(role, grantee string) error {
 	_, err := c.db.Exec(fmt.Sprintf(GRANT_ROLE, role, grantee))
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *pg) SetSchemaPrivileges(db, creator, role, schema, privs string, logger logr.Logger) error {
+	tmpDb := GetConnection(c.user, c.pass, c.host, db, c.args, logger)
+	defer tmpDb.Close()
+
+	// Grant role usage on schema
+	_, err := tmpDb.Exec(fmt.Sprintf(GRANT_USAGE_SCHEMA, schema, role))
+	if err != nil {
+		return err
+	}
+
+	// Grant role privs on existing tables in schema
+	_, err = tmpDb.Exec(fmt.Sprintf(GRANT_ALL_TABLES, privs, schema, role))
+	if err != nil {
+		return err
+	}
+
+	// Grant role privs on future tables in schema
+	_, err = tmpDb.Exec(fmt.Sprintf(DEFAULT_PRIVS_SCHEMA, creator, schema, privs, role))
 	if err != nil {
 		return err
 	}
@@ -122,6 +159,10 @@ func (c *pg) DropRole(role, newOwner, database string, logger logr.Logger) error
 	// to REASSIGN OWNED BY unless he belongs to both roles
 	err := c.GrantRole(role, c.user)
 	if err != nil && err.(*pq.Error).Code != "0LP01" {
+		if err.(*pq.Error).Code == "42704" {
+			// The group role does not exist, no point in continuing
+			return nil
+		}
 		return err
 	}
 	err = c.GrantRole(newOwner, c.user)
@@ -142,11 +183,16 @@ func (c *pg) DropRole(role, newOwner, database string, logger logr.Logger) error
 		return err
 	}
 
+	// We previously assigned all objects to the operator's role so DROP OWNED BY will drop privileges of role
+	_, err = tmpDb.Exec(fmt.Sprintf(DROP_OWNED_BY, role))
+	if err != nil && err.(*pq.Error).Code != "42704" {
+		return err
+	}
+
 	_, err = c.db.Exec(fmt.Sprintf(DROP_ROLE, role))
 	if err != nil && err.(*pq.Error).Code != "42704" {
 		return err
 	}
-	logger.Info(fmt.Sprintf("Dropped role %s", role))
 	return nil
 }
 
